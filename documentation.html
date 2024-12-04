@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TruthLine Project Documentation & Issues</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .concept {
+            border-left: 4px solid #2c3e50;
+            padding-left: 20px;
+            margin: 20px 0;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .issue {
+            border-left: 4px solid #dc3545;
+            padding-left: 20px;
+            margin: 20px 0;
+            background: #fff5f5;
+        }
+    </style>
+</head>
+<body>
+    <h1>TruthLine: Token Weight Visualization Project</h1>
+    
+    <h2>Current Issues & Challenges</h2>
+    <div class="issue">
+        <h3>Animation Flow Issues</h3>
+        <ul>
+            <li>Line drawing animation sometimes stalls at prediction point</li>
+            <li>Spacebar event handling is inconsistent</li>
+            <li>Multiple prediction generations occurring when should only happen once</li>
+            <li>Animation timing needs fine-tuning for smoother transitions</li>
+        </ul>
+        <p><strong>Potential Causes:</strong></p>
+        <ul>
+            <li>State management confusion between prediction and actual path</li>
+            <li>Event listener cleanup not properly handled</li>
+            <li>Animation frame timing conflicts</li>
+            <li>Possible race conditions in the animation loop</li>
+        </ul>
+    </div>
+
+    <h2>Suggested Improvements</h2>
+    <div class="concept">
+        <h3>State Management</h3>
+        <p>Current state variables are scattered and potentially conflicting. Consider:</p>
+        <ul>
+            <li>Centralizing state in a single object</li>
+            <li>Implementing proper state transitions</li>
+            <li>Adding state validation</li>
+        </ul>
+        <pre>
+const visualizationState = {
+    stage: 'initial' | 'drawing' | 'predicting' | 'complete',
+    pathPoints: [],
+    prediction: null,
+    isAnimating: false
+};
+        </pre>
+    </div>
+
+    <h2>Animation Flow</h2>
+    <div class="concept">
+        <p>Current animation flow is complex and prone to timing issues. Consider:</p>
+        <ul>
+            <li>Separating animation concerns</li>
+            <li>Implementing proper animation queuing</li>
+            <li>Adding animation completion callbacks</li>
+        </ul>
+        <pre>
+function animateSequence() {
+    return new Promise((resolve) => {
+        // Animation logic
+        resolve();
+    });
+}
+        </pre>
+    </div>
+
+    <h2>Event Handling</h2>
+    <div class="concept">
+        <p>Current event handling is fragile. Consider:</p>
+        <ul>
+            <li>Implementing proper event cleanup</li>
+            <li>Adding event debouncing</li>
+            <li>Centralizing event management</li>
+        </ul>
+    </div>
+
+    <h2>Performance Considerations</h2>
+    <div class="concept">
+        <ul>
+            <li>Buffer geometry updates could be optimized</li>
+            <li>Animation frame handling could be more efficient</li>
+            <li>Memory management needs attention</li>
+        </ul>
+    </div>
+
+    <h2>Next Steps</h2>
+    <div class="concept">
+        <ol>
+            <li>Implement proper state management</li>
+            <li>Refactor animation system</li>
+            <li>Add proper cleanup routines</li>
+            <li>Implement error boundaries</li>
+            <li>Add performance monitoring</li>
+        </ol>
+    </div>
+</body>
+</html> 

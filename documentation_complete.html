@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TruthLine Project Documentation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .concept {
+            border-left: 4px solid #2c3e50;
+            padding-left: 20px;
+            margin: 20px 0;
+        }
+        .highlight {
+            background: #fff3cd;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .issue {
+            border-left: 4px solid #dc3545;
+            padding-left: 20px;
+            margin: 20px 0;
+            background: #fff5f5;
+        }
+    </style>
+</head>
+<body>
+    <h1>TruthLine: Token Weight Visualization Project</h1>
+    
+    <h2>Theoretical Foundation & Discovery</h2>
+    <div class="concept">
+        <p class="highlight">
+            "What if the path through token weight space follows the same fundamental laws as protein folding in nature?"
+        </p>
+        
+        <p>This project emerged from a remarkable observation: the way AI language models process tokens 
+        might follow patterns similar to how proteins fold in biological systems. This isn't just a superficial 
+        similarity - it suggests a deeper connection between information processing in artificial and natural systems.</p>
+
+        <h3>Key Insights:</h3>
+        <ul>
+            <li><strong>Natural Optimization:</strong> Just as proteins fold into their most energetically 
+            favorable state, token paths seem to naturally find optimal routes through weight space</li>
+            
+            <li><strong>Predictability Horizon:</strong> Like protein folding, we discovered that with just 
+            20% of the path complete (4 points), we could make meaningful predictions about the final 
+            configuration</li>
+            
+            <li><strong>Universal Patterns:</strong> The emergence of similar patterns in both AI token 
+            processing and biological systems suggests possible universal principles of information 
+            organization</li>
+        </ul>
+
+        <h3>Implications:</h3>
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0;">
+            <p>If token processing in AI systems naturally follows patterns similar to protein folding, 
+            this could suggest:</p>
+            <ul>
+                <li>Potential for using protein folding algorithms to optimize AI token processing</li>
+                <li>New approaches to predicting and optimizing AI behavior</li>
+                <li>Fundamental connections between information processing in biological and artificial systems</li>
+                <li>Possible applications in both AI optimization and protein structure prediction</li>
+            </ul>
+        </div>
+    </div>
+
+    <h2>Key Components</h2>
+
+    <h3>1. Token Cloud Visualization</h3>
+    <div class="concept">
+        <p>The visualization creates a spherical distribution of points representing tokens, where:</p>
+        <ul>
+            <li>Green points represent high-weight tokens (like energetically favorable states)</li>
+            <li>Pink/Red points represent low-weight tokens (like high-energy states)</li>
+            <li>Point size is kept small (0.05 units) for clarity</li>
+            <li>Points are rendered as circles using a custom texture</li>
+        </ul>
+        <pre>
+// Point generation code (similar to molecular distribution):
+const phi = Math.acos(2 * Math.random() - 1);
+const theta = Math.random() * Math.PI * 2;
+const radius = Math.pow(Math.random(), 1/3) * 4;
+
+positions.push(
+    radius * Math.sin(phi) * Math.cos(theta),
+    radius * Math.sin(phi) * Math.sin(theta),
+    radius * Math.cos(phi)
+);
+        </pre>
+    </div>
+
+    <h3>2. Path Finding System</h3>
+    <div class="concept">
+        <p>Like protein folding, the system finds optimal paths using:</p>
+        <ul>
+            <li>A search radius (similar to chemical bond length constraints)</li>
+            <li>Weight-based selection (like energy minimization)</li>
+            <li>Path history to avoid revisiting (similar to steric hindrance)</li>
+            <li>Spatial optimization for performance</li>
+        </ul>
+    </div>
+
+    <h2>Current Issues & Challenges</h2>
+    <div class="issue">
+        <h3>Animation Flow Issues</h3>
+        <ul>
+            <li>Line drawing animation sometimes stalls at prediction point</li>
+            <li>Spacebar event handling is inconsistent</li>
+            <li>Multiple prediction generations occurring when should only happen once</li>
+            <li>Animation timing needs fine-tuning for smoother transitions</li>
+        </ul>
+        <p><strong>Potential Causes:</strong></p>
+        <ul>
+            <li>State management confusion between prediction and actual path</li>
+            <li>Event listener cleanup not properly handled</li>
+            <li>Animation frame timing conflicts</li>
+            <li>Possible race conditions in the animation loop</li>
+        </ul>
+    </div>
+
+    <h2>Suggested Improvements</h2>
+    <div class="concept">
+        <h3>State Management</h3>
+        <p>Current state variables are scattered and potentially conflicting. Consider:</p>
+        <ul>
+            <li>Centralizing state in a single object</li>
+            <li>Implementing proper state transitions</li>
+            <li>Adding state validation</li>
+        </ul>
+        <pre>
+const visualizationState = {
+    stage: 'initial' | 'drawing' | 'predicting' | 'complete',
+    pathPoints: [],
+    prediction: null,
+    isAnimating: false
+};
+        </pre>
+    </div>
+
+    <h2>Next Steps</h2>
+    <div class="concept">
+        <ol>
+            <li>Implement proper state management</li>
+            <li>Refactor animation system</li>
+            <li>Add proper cleanup routines</li>
+            <li>Implement error boundaries</li>
+            <li>Add performance monitoring</li>
+        </ol>
+    </div>
+</body>
+</html> 
