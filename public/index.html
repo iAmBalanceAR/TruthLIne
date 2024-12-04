@@ -2,6 +2,8 @@
 <html>
 <head>
     <title>Truth Line Visualization</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
     <style>
         body { 
             margin: 0; 
@@ -17,9 +19,11 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
             padding: 15px;
-            border-radius: 5px;
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
             z-index: 100;
         }
         .legend-item {
@@ -33,17 +37,27 @@
             margin-right: 10px;
             border-radius: 50%;
         }
-        #caption {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.7);
-            padding: 15px;
-            border-radius: 5px;
-            text-align: center;
-            z-index: 100;
-            min-width: 300px;
+        .modern-button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(10px);
+        }
+        .modern-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        .modern-button:active {
+            transform: translateY(0px);
         }
     </style>
 </head>
@@ -62,7 +76,6 @@
             <span>Low Weight Tokens</span>
         </div>
     </div>
-    <div id="caption">Initializing token cloud visualization...</div>
     <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
     <script type="importmap">
     {
