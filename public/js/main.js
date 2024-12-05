@@ -1,7 +1,16 @@
-console.log('main.js loaded - starting initialization');
-
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Global variables
+let scene, camera, renderer, controls;
+let tokenCloud = null;
+let lineSets = [];
+let lineCount = 0;
+let isCloudVisible = true;
+let isPathsExtracted = false;
+const originalPathPosition = new THREE.Vector3();
+const extractedPosition = new THREE.Vector3(0, 0, -15);
+const SEGMENT_DURATION = 300;
 
 const debug = document.getElementById('debug');
 function log(message) {
@@ -11,27 +20,19 @@ function log(message) {
     }
 }
 
-let scene, camera, renderer, controls;
-let combinedLine = null;
-let glowLine = null;
-let storedPrediction = null;
-let currentPathIndex = 0;
-let allPoints = [];
-let lineColors = [];
-const pathPoints = [];
-let isAnimating = false;
-let animationProgress = 0;
-const ANIMATION_SPEED = 0.7;
-const SEGMENT_DURATION = 300;
-let predictionPoints = [];
-let predictionAnimationProgress = 0;
-let isPredictionAnimating = false;
-let predictionLine = null;
-let isCloudVisible = true;
-let tokenCloud = null;
-let isPathsExtracted = false;
-let originalPathPosition = new THREE.Vector3();
-let extractedPosition = new THREE.Vector3(0, 0, -15);
+console.log('main.js loaded - starting initialization');
+
+const DEFAULT_SETTINGS = {
+    PREDICTION_START_POINT: 9,
+    MAX_LINES: 3,
+    LINE_DELAY: 2000,
+    RANDOM_FACTOR: 0.5,
+    PATH_LENGTH: 30,
+    TOKEN_DENSITY: 0.3,
+    ANIMATION_SPEED: 0.7
+};
+
+let currentSettings = { ...DEFAULT_SETTINGS };
 
 const PATH_CONSTANTS = {
     ENERGY_THRESHOLD: 0.7,
@@ -40,450 +41,272 @@ const PATH_CONSTANTS = {
     PREDICTION_START_POINT: 9
 };
 
-// Add these camera positions near the top with other constants
-const CAMERA_POSITIONS = {
-    front: { x: 0, y: 0, z: 10 },
-    top: { x: 0, y: 10, z: 0 },
-    side: { x: 10, y: 0, z: 0 },
-    angle: { x: 6, y: 6, z: 6 }
-};
+function restartVisualization() {
+    // Show loading indicator
+    const loading = document.createElement('div');
+    loading.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        z-index: 1000;
+    `;
+    loading.textContent = 'Restarting Visualization...';
+    document.body.appendChild(loading);
 
-// Add at the top with other state variables
-const MAX_LINES = 3;  // How many lines we want to run concurrently
-let lineCount = 0;
-const lineSets = [];  // Array to store our line sets
-
-// Add to state variables
-const DEFAULT_SETTINGS = {
-    MAX_LINES: 3,
-    ANIMATION_SPEED: 0.7,
-    SEGMENT_DURATION: 300,
-    PREDICTION_START_POINT: 9,
-    RANDOM_FACTOR: 0.5,
-    TURBULENCE: 0.3,
-    RESOLUTION: 50,
-    FIELD_SIZE: 8,
-    NOISE_SCALE: 0.2
-};
-
-let currentSettings = { ...DEFAULT_SETTINGS };
-
-// Add to state variables
-let globalPathMemory = {
-    successfulPaths: [],
-    weightedRegions: new Map()
-};
-
-// Create a class to manage each line set
-class LineSet {
-    constructor(scene, index) {
-        this.scene = scene;
-        this.index = index;
-        this.color = new THREE.Color().setHSL(index / currentSettings.MAX_LINES, 1, 0.5);
-        
-        // Initialize arrays and state variables
-        this.allPoints = [];
-        this.lineColors = [];
-        this.currentPathIndex = 0;
-        this.isAnimating = false;
-        this.animationProgress = 0;
-        this.predictionPoints = [];
-        
-        this.initialize();
-        this.learnFromPreviousLines();
-    }
-
-    initialize() {
-        // Create the lines
-        this.combinedLine = new THREE.Line(
-            new THREE.BufferGeometry(),
-            new THREE.LineBasicMaterial({
-                vertexColors: true,
-                linewidth: 16,
-                transparent: true,
-                opacity: 1.0
-            })
-        );
-
-        this.glowLine = new THREE.Line(
-            new THREE.BufferGeometry(),
-            new THREE.LineBasicMaterial({
-                vertexColors: true,
-                linewidth: 32,
-                transparent: true,
-                opacity: 0.6,
-                blending: THREE.AdditiveBlending
-            })
-        );
-
-        this.scene.add(this.glowLine);
-        this.scene.add(this.combinedLine);
-
-        // Modify material colors to use this.color
-        this.combinedLine.material.color = this.color;
-    }
-
-    startPath() {
-        if (!tokenCloud) {
-            console.error('Token cloud not available');
-            return;
-        }
-
-        // Get random starting point
-        const positions = tokenCloud.geometry.attributes.position;
-        const count = positions.array.length / 3;
-        const randomIndex = Math.floor(Math.random() * count) * 3;
-        const startPoint = new THREE.Vector3(
-            positions.array[randomIndex],
-            positions.array[randomIndex + 1],
-            positions.array[randomIndex + 2]
-        );
-
-        this.allPoints.push(startPoint.clone());
-        this.lineColors.push(new THREE.Color(0x00ffff));
-        this.animateNextSegment();
-    }
-
-    animateNextSegment() {
-        if (this.currentPathIndex >= 30) {
-            console.log('Truth path complete');
-            this.addPredictionPoints();
-            return;
-        }
-
-        if (!this.isAnimating) {
-            this.isAnimating = true;
-            this.animationProgress = 0;
-            
-            const positions = tokenCloud.geometry.attributes.position;
-            const weights = tokenCloud.geometry.attributes.weight;
-            
-            const currentPoint = this.allPoints[this.currentPathIndex];
-            const nextPoint = this.findNextHighestWeightPoint(currentPoint, positions, weights);
-            
-            const animate = () => {
-                this.animationProgress += ANIMATION_SPEED * (16.67 / SEGMENT_DURATION);
-                
-                if (this.animationProgress >= 1) {
-                    this.allPoints.push(nextPoint.clone());
-                    this.lineColors.push(new THREE.Color(0x00ffff));
-                    this.updatePathGeometry();
-                    
-                    if (this.currentPathIndex === PATH_CONSTANTS.PREDICTION_START_POINT - 1) {
-                        const prediction = this.predictFullPath(this.allPoints.slice(0, PATH_CONSTANTS.PREDICTION_START_POINT));
-                        storedPrediction = prediction;
-                        this.predictionPoints = prediction.paths[0];
-                    }
-                    
-                    this.isAnimating = false;
-                    this.currentPathIndex++;
-                    setTimeout(() => this.animateNextSegment(), 50);
-                    return;
-                }
-                
-                const interpolatedPoint = new THREE.Vector3().lerpVectors(
-                    currentPoint,
-                    nextPoint,
-                    this.animationProgress
-                );
-                
-                const currentPoints = [...this.allPoints, interpolatedPoint];
-                const currentColors = [...this.lineColors, new THREE.Color(0x00ffff)];
-                
-                this.updatePathGeometry();
-                
-                requestAnimationFrame(animate);
-            };
-            
-            animate();
-        }
-    }
-
-    findNextHighestWeightPoint(currentPoint, positions, weights) {
-        // Validate input point
-        if (!this.validatePoint(currentPoint)) {
-            console.error('Invalid current point:', currentPoint);
-            return currentPoint.clone(); // Return safe value
-        }
-
-        const fieldStrength = (point) => {
-            let elevation = 0;
-            const maxInfluence = 2.0;
-            
-            // Increase random variation
-            const randomFactor = 0.5;
-            const random = Math.random() * randomFactor;
-            
-            // Add turbulence
-            const turbulence = Math.sin(point.x * 5) * Math.cos(point.z * 5) * 0.3;
-            
-            for (let i = 0; i < positions.array.length; i += 3) {
-                const tokenPos = new THREE.Vector3(
-                    positions.array[i],
-                    positions.array[i + 1],
-                    positions.array[i + 2]
-                );
-                
-                const distance = point.distanceTo(tokenPos);
-                if (distance < maxInfluence) {
-                    const weight = weights.array[i / 3];
-                    elevation += (weight + random + turbulence) / (1 + distance * distance);
-                }
-            }
-            
-            // Add bias from learned successful paths
-            const learnedBias = this.getLearnedBias(point);
-            elevation += learnedBias;
-            
-            return elevation;
-        };
-
-        const randomOffset = new THREE.Vector3(
-            (Math.random() - 0.5) * 0.4,
-            (Math.random() - 0.5) * 0.4,
-            (Math.random() - 0.5) * 0.4
-        );
-        
-        let currentPos = currentPoint.clone().add(randomOffset);
-        
-        const steps = 12;
-        const stepSize = 0.15;
-        
-        for (let i = 0; i < steps; i++) {
-            const gradient = new THREE.Vector3();
-            const delta = 0.1;
-            
-            const center = fieldStrength(currentPos);
-            
-            ['x', 'y', 'z'].forEach(axis => {
-                const testPoint = currentPos.clone();
-                testPoint[axis] += delta;
-                const heightDiff = fieldStrength(testPoint) - center;
-                gradient[axis] = heightDiff / delta;
-            });
-            
-            gradient.normalize().multiplyScalar(stepSize);
-            gradient.add(randomOffset.multiplyScalar(0.1));
-            currentPos.add(gradient);
-        }
-        
-        // Validate output point before returning
-        if (!this.validatePoint(currentPos)) {
-            console.error('Generated invalid point:', currentPos);
-            return currentPoint.clone(); // Return safe value
-        }
-        
-        return currentPos;
-    }
-
-    predictFullPath(currentPoints) {
-        console.log('Generating prediction from current points:', currentPoints.length);
-        const positions = tokenCloud.geometry.attributes.position;
-        const weights = tokenCloud.geometry.attributes.weight;
-        
-        const predictedPath = [];
-        let currentPoint = currentPoints[currentPoints.length - 1].clone();
-        
-        for (let i = 0; i < (30 - currentPoints.length); i++) {
-            const nextPoint = this.findNextHighestWeightPoint(currentPoint, positions, weights);
-            predictedPath.push(nextPoint.clone());
-            currentPoint = nextPoint;
-        }
-        
-        return {
-            paths: [predictedPath],
-            confidence: 0.85
-        };
-    }
-
-    updatePathGeometry() {
-        const positions = [];
-        const colors = [];
-        
-        // Filter out invalid points
-        const validPoints = this.allPoints.filter(point => this.validatePoint(point));
-        
-        validPoints.forEach((point, index) => {
-            positions.push(point.x, point.y, point.z);
-            const color = this.lineColors[index] || new THREE.Color(0x00ffff);
-            colors.push(color.r, color.g, color.b);
-        });
-        
-        // Only update geometry if we have valid points
-        if (positions.length > 0) {
-        this.combinedLine.geometry.setAttribute('position', 
-            new THREE.Float32BufferAttribute(positions, 3));
-        this.combinedLine.geometry.setAttribute('color', 
-            new THREE.Float32BufferAttribute(colors, 3));
-            
-        this.glowLine.geometry.setAttribute('position', 
-            new THREE.Float32BufferAttribute(positions, 3));
-        this.glowLine.geometry.setAttribute('color', 
-            new THREE.Float32BufferAttribute(colors, 3));
-        }
-    }
-
-    addPredictionPoints() {
-        if (!this.predictionPoints || this.predictionPoints.length === 0) {
-            console.error('No prediction points available');
-            return;
-        }
-
-        const predictionGeometry = new THREE.BufferGeometry();
-        const predictionMaterial = new THREE.LineBasicMaterial({
-            color: 0xffff00,
-            linewidth: 16,
-            transparent: true,
-            opacity: 1.0
-        });
-
-        this.predictionLine = new THREE.Line(predictionGeometry, predictionMaterial);
-        
-        // Validate starting point
-        const startPoint = this.allPoints[PATH_CONSTANTS.PREDICTION_START_POINT - 1];
-        if (!startPoint || !this.validatePoint(startPoint)) {
-            console.error('Invalid prediction start point');
-            return;
-        }
-
-        const predictionPositions = [startPoint.clone()];
-
-        const addNextPoint = (index) => {
-            if (index >= this.predictionPoints.length) {
-                console.log('Prediction Complete');
-                return;
-            }
-
-            const nextPoint = this.predictionPoints[index];
-            if (this.validatePoint(nextPoint)) {
-                predictionPositions.push(nextPoint.clone());
-                
-                const positions = predictionPositions.flatMap(p => [p.x, p.y, p.z]);
-            predictionGeometry.setAttribute('position', 
-                new THREE.Float32BufferAttribute(positions, 3));
-            }
-
-            setTimeout(() => addNextPoint(index + 1), SEGMENT_DURATION);
-        };
-
-        this.scene.add(this.predictionLine);
-        addNextPoint(0);
-    }
-
-    learnFromPreviousLines() {
-        if (lineSets.length > 0) {
-            // Learn from previous lines' successful paths
-            const previousPaths = lineSets.map(set => ({
-                points: set.allPoints,
-                prediction: set.predictionPoints
-            }));
-
-            // Adjust our weight calculations based on previous successes
-            this.adjustWeightCalculation(previousPaths);
-        }
-    }
-
-    adjustWeightCalculation(previousPaths) {
-        // Modify findNextHighestWeightPoint to consider successful paths
-        const successfulRegions = this.analyzeSuccessfulRegions(previousPaths);
-        // Bias our path towards regions where predictions matched truth
-    }
-
-    analyzeSuccessfulRegions(previousPaths) {
-        const successfulRegions = new Map();
-        
-        previousPaths.forEach(path => {
-            // Compare truth and prediction points
-            const truthPoints = path.points;
-            const predPoints = path.prediction;
-            
-            if (!predPoints) return;
-            
-            // Find regions where prediction matched truth
-            for (let i = 0; i < predPoints.length; i++) {
-                const predPoint = predPoints[i];
-                const truthPoint = truthPoints[PATH_CONSTANTS.PREDICTION_START_POINT + i];
-                
-                if (!truthPoint) continue;
-                
-                const accuracy = 1 - predPoint.distanceTo(truthPoint);
-                if (accuracy > 0.8) { // High accuracy threshold
-                    const key = `${Math.round(predPoint.x)},${Math.round(predPoint.y)},${Math.round(predPoint.z)}`;
-                    successfulRegions.set(key, (successfulRegions.get(key) || 0) + accuracy);
-                }
-            }
-        });
-        
-        return successfulRegions;
-    }
-
-    getLearnedBias(point) {
-        if (!this.successfulRegions) return 0;
-        
-        let bias = 0;
-        const searchRadius = 1.0;
-        
-        this.successfulRegions.forEach((weight, key) => {
-            const [x, y, z] = key.split(',').map(Number);
-            const regionPoint = new THREE.Vector3(x, y, z);
-            
-            const distance = point.distanceTo(regionPoint);
-            if (distance < searchRadius) {
-                bias += (weight * (1 - distance / searchRadius));
-            }
-        });
-        
-        return bias * 0.3; // Scale the influence
-    }
-
-    // Add smooth path generation
-    createSmoothPath(points, segments = 10) {
-        if (points.length < 2) return points;
-        
-        const curve = new THREE.CatmullRomCurve3(points);
-        return curve.getPoints(points.length * segments);
-    }
-
-    // Add token highlighting
-    updateTokenColors(pathPoints) {
-        if (!tokenCloud) return;
-        
-        const positions = tokenCloud.geometry.attributes.position;
-        const colors = tokenCloud.geometry.attributes.color;
-        const threshold = 0.2;
-        
-        for (let i = 0; i < positions.count; i++) {
-            const point = new THREE.Vector3(
-                positions.array[i * 3],
-                positions.array[i * 3 + 1],
-                positions.array[i * 3 + 2]
-            );
-            
-            // Check if point is near path
-            const isNearPath = pathPoints.some(pathPoint => 
-                point.distanceTo(pathPoint) < threshold
-            );
-            
-            if (isNearPath) {
-                colors.array[i * 3] = 1;     // R
-                colors.array[i * 3 + 1] = 1; // G
-                colors.array[i * 3 + 2] = 1; // B
-            }
-        }
-        
-        colors.needsUpdate = true;
-    }
-
-    // Add a validation helper
-    validatePoint(point) {
-        return !isNaN(point.x) && !isNaN(point.y) && !isNaN(point.z) &&
-               isFinite(point.x) && isFinite(point.y) && isFinite(point.z);
-    }
-
-    // ... we'll add more methods here
+    // Clear existing lines
+    lineSets.forEach(lineSet => {
+        if (lineSet.combinedLine) scene.remove(lineSet.combinedLine);
+        if (lineSet.glowLine) scene.remove(lineSet.glowLine);
+        if (lineSet.predictionLine) scene.remove(lineSet.predictionLine);
+    });
+    
+    // Reset state
+    lineSets.length = 0;
+    lineCount = 0;
+    
+    // Start new visualization
+    setTimeout(() => {
+        animatePath();
+        loading.remove();
+    }, 100);
 }
 
-// Create a new modern UI container
+// Settings storage functions
+function saveSettings() {
+    const data = {
+        settings: currentSettings,
+        timestamp: new Date().toISOString(),
+        results: lineSets.map(lineSet => ({
+            truthPath: lineSet.allPoints,
+            predictionPath: lineSet.predictionPoints,
+            accuracy: calculateAccuracy(lineSet)
+        }))
+    };
+
+    localStorage.setItem('pathSettings', JSON.stringify(data));
+}
+
+function loadSettings() {
+    try {
+        const saved = localStorage.getItem('pathSettings');
+        return saved ? JSON.parse(saved).settings : DEFAULT_SETTINGS;
+    } catch (e) {
+        console.error('Error loading settings:', e);
+        return DEFAULT_SETTINGS;
+    }
+}
+
+function calculateAccuracy(lineSet) {
+    if (!lineSet.predictionPoints || !lineSet.allPoints) return 0;
+    
+    let totalDeviation = 0;
+    let pointCount = 0;
+    
+    for (let i = 0; i < lineSet.predictionPoints.length; i++) {
+        const truthIndex = PATH_CONSTANTS.PREDICTION_START_POINT + i;
+        if (truthIndex >= lineSet.allPoints.length) break;
+        
+        const deviation = lineSet.predictionPoints[i].distanceTo(lineSet.allPoints[truthIndex]);
+        totalDeviation += deviation;
+        pointCount++;
+    }
+    
+    return pointCount > 0 ? 1 - (totalDeviation / pointCount) : 0;
+}
+
+function showSettingsPanel() {
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.9);
+        backdrop-filter: blur(10px);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        z-index: 1000;
+        min-width: 300px;
+        box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        max-height: 80vh;
+        overflow-y: auto;
+    `;
+
+    const settings = [
+        { 
+            label: 'Prediction Start Point', 
+            key: 'PREDICTION_START_POINT', 
+            min: 4, 
+            max: 20, 
+            step: 1,
+            tooltip: 'Point at which prediction begins'
+        },
+        { 
+            label: 'Number of Lines', 
+            key: 'MAX_LINES', 
+            min: 1, 
+            max: 5, 
+            step: 1,
+            tooltip: 'Number of concurrent paths'
+        },
+        { 
+            label: 'Line Spacing', 
+            key: 'LINE_DELAY', 
+            min: 500, 
+            max: 5000, 
+            step: 100,
+            tooltip: 'Delay between new lines (ms)'
+        },
+        { 
+            label: 'Randomness', 
+            key: 'RANDOM_FACTOR', 
+            min: 0, 
+            max: 1, 
+            step: 0.1,
+            tooltip: 'Amount of random variation in paths'
+        },
+        { 
+            label: 'Path Length', 
+            key: 'PATH_LENGTH', 
+            min: 20, 
+            max: 50, 
+            step: 5,
+            tooltip: 'Total length of each path'
+        },
+        { 
+            label: 'Token Density', 
+            key: 'TOKEN_DENSITY', 
+            min: 0.2, 
+            max: 0.8, 
+            step: 0.1,
+            tooltip: 'Density of tokens in the cloud'
+        },
+        {
+            label: 'Animation Speed',
+            key: 'ANIMATION_SPEED',
+            min: 0.1,
+            max: 2.0,
+            step: 0.1,
+            tooltip: 'Speed of path animation'
+        }
+    ];
+
+    settings.forEach(setting => {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            margin-bottom: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        `;
+
+        const labelContainer = document.createElement('div');
+        labelContainer.style.display = 'flex';
+        labelContainer.style.justifyContent = 'space-between';
+
+        const label = document.createElement('label');
+        label.textContent = setting.label;
+
+        const value = document.createElement('span');
+        value.textContent = currentSettings[setting.key];
+
+        labelContainer.appendChild(label);
+        labelContainer.appendChild(value);
+
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = setting.min;
+        input.max = setting.max;
+        input.step = setting.step;
+        input.value = currentSettings[setting.key];
+        input.style.width = '100%';
+
+        input.oninput = () => {
+            currentSettings[setting.key] = parseFloat(input.value);
+            value.textContent = input.value;
+        };
+
+        container.appendChild(labelContainer);
+        container.appendChild(input);
+
+        if (setting.tooltip) {
+            const tooltip = document.createElement('small');
+            tooltip.textContent = setting.tooltip;
+            tooltip.style.opacity = '0.7';
+            container.appendChild(tooltip);
+        }
+
+        panel.appendChild(container);
+    });
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = `
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+        justify-content: flex-end;
+    `;
+
+    const buttonStyle = `
+        background: #2a2a2a;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        color: white;
+        cursor: pointer;
+        transition: background 0.3s;
+    `;
+
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Apply & Restart';
+    applyBtn.style.cssText = buttonStyle + 'background: #4CAF50;';
+    applyBtn.onclick = () => {
+        saveSettings();
+        restartVisualization();
+        panel.remove();
+    };
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = buttonStyle;
+    cancelBtn.onclick = () => {
+        currentSettings = { ...loadSettings() };
+        panel.remove();
+    };
+
+    [applyBtn, cancelBtn].forEach(btn => {
+        btn.addEventListener('mouseenter', () => {
+            btn.style.filter = 'brightness(1.2)';
+        });
+        btn.addEventListener('mouseleave', () => {
+            btn.style.filter = 'none';
+        });
+    });
+
+    buttonContainer.appendChild(cancelBtn);
+    buttonContainer.appendChild(applyBtn);
+    panel.appendChild(buttonContainer);
+
+    document.body.appendChild(panel);
+}
+
+function createButton(icon, label, onClick) {
+    const button = document.createElement('button');
+    button.className = 'modern-button';
+    button.innerHTML = `
+        <span class="material-icons">${icon}</span>
+        <span>${label}</span>
+    `;
+    button.onclick = onClick;
+    return button;
+}
+
 function createModernUI() {
     const uiContainer = document.createElement('div');
     uiContainer.style.cssText = `
@@ -503,19 +326,12 @@ function createModernUI() {
         box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
     `;
 
-    // Create modern toggle buttons
-    const createButton = (icon, label, onClick) => {
-        const button = document.createElement('button');
-        button.className = 'modern-button';
-        button.innerHTML = `
-            <span class="material-icons">${icon}</span>
-            <span>${label}</span>
-        `;
-        button.onclick = onClick;
-        return button;
-    };
+    const settingsBtn = createButton(
+        'settings',
+        'Settings',
+        showSettingsPanel
+    );
 
-    // Add visualization controls
     const toggleCloudBtn = createButton(
         'visibility',
         'Toggle Cloud',
@@ -561,7 +377,6 @@ function createModernUI() {
                     const targetPos = isPathsExtracted ? extractedPosition : originalPathPosition;
                     const cloudOpacity = isPathsExtracted ? 0.1 : 1.0;
 
-                    // Handle different extraction options for all line sets
                     lineSets.forEach(lineSet => {
                         switch(option.action) {
                             case 'truth':
@@ -618,7 +433,6 @@ function createModernUI() {
         }
     );
 
-    // Add camera controls
     const cameraControlsBtn = createButton(
         'videocam',
         'Camera Views',
@@ -640,10 +454,10 @@ function createModernUI() {
             `;
 
             const views = [
-                { label: 'Front View', pos: CAMERA_POSITIONS.front },
-                { label: 'Top View', pos: CAMERA_POSITIONS.top },
-                { label: 'Side View', pos: CAMERA_POSITIONS.side },
-                { label: 'Angle View', pos: CAMERA_POSITIONS.angle }
+                { label: 'Front View', pos: { x: 0, y: 0, z: 10 } },
+                { label: 'Top View', pos: { x: 0, y: 10, z: 0 } },
+                { label: 'Side View', pos: { x: 10, y: 0, z: 0 } },
+                { label: 'Angle View', pos: { x: 6, y: 6, z: 6 } }
             ];
 
             views.forEach(view => {
@@ -658,14 +472,7 @@ function createModernUI() {
         }
     );
 
-    const settingsBtn = createButton(
-        'settings',
-        'Settings',
-        showSettingsPanel
-    );
-
     uiContainer.appendChild(settingsBtn);
-
     uiContainer.appendChild(toggleCloudBtn);
     uiContainer.appendChild(extractPathsBtn);
     uiContainer.appendChild(cameraControlsBtn);
@@ -673,153 +480,518 @@ function createModernUI() {
     document.body.appendChild(uiContainer);
 }
 
-function showSettingsPanel() {
-    const panel = document.createElement('div');
-    panel.style.cssText = `
-        position: fixed;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0, 0, 0, 0.9);
-        backdrop-filter: blur(10px);
-        padding: 20px;
-        border-radius: 15px;
-        color: white;
-        z-index: 1000;
-        min-width: 300px;
-    `;
-
-    const settings = [
-        { 
-            label: 'Prediction Start Point', 
-            key: 'PREDICTION_START_POINT', 
-            min: 4, 
-            max: 20, 
-            step: 1,
-            tooltip: 'Point at which prediction begins'
-        },
-        { 
-            label: 'Number of Lines', 
-            key: 'MAX_LINES', 
-            min: 1, 
-            max: 5, 
-            step: 1,
-            tooltip: 'Number of concurrent paths'
-        },
-        { 
-            label: 'Line Spacing', 
-            key: 'LINE_DELAY', 
-            min: 500, 
-            max: 5000, 
-            step: 100,
-            tooltip: 'Delay between new lines (ms)'
-        },
-        { 
-            label: 'Randomness', 
-            key: 'RANDOM_FACTOR', 
-            min: 0, 
-            max: 1, 
-            step: 0.1,
-            tooltip: 'Amount of random variation in paths'
-        }
-    ];
-
-    settings.forEach(setting => {
-        const container = document.createElement('div');
-        container.style.cssText = `
-            margin-bottom: 15px;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        `;
-
-        const labelContainer = document.createElement('div');
-        labelContainer.style.display = 'flex';
-        labelContainer.style.justifyContent = 'space-between';
-
-        const label = document.createElement('label');
-        label.textContent = setting.label;
-
-        const value = document.createElement('span');
-        value.textContent = currentSettings[setting.key];
-
-        labelContainer.appendChild(label);
-        labelContainer.appendChild(value);
-
-        const input = document.createElement('input');
-        input.type = 'range';
-        input.min = setting.min;
-        input.max = setting.max;
-        input.step = setting.step;
-        input.value = currentSettings[setting.key];
-        input.style.width = '100%';
-
-        input.oninput = () => {
-            currentSettings[setting.key] = parseFloat(input.value);
-            value.textContent = input.value;
-        };
-
-        container.appendChild(labelContainer);
-        container.appendChild(input);
-
-        if (setting.tooltip) {
-            const tooltip = document.createElement('small');
-            tooltip.textContent = setting.tooltip;
-            tooltip.style.opacity = '0.7';
-            container.appendChild(tooltip);
-        }
-
-        panel.appendChild(container);
-    });
-
-    // Add apply/cancel buttons
-    const buttonContainer = document.createElement('div');
-    buttonContainer.style.cssText = `
-        display: flex;
-        gap: 10px;
-        margin-top: 20px;
-        justify-content: flex-end;
-    `;
-
-    const applyBtn = document.createElement('button');
-    applyBtn.textContent = 'Apply & Restart';
-    applyBtn.onclick = () => {
-        saveSettings();
-        restartVisualization();
-        panel.remove();
-    };
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.onclick = () => {
-        currentSettings = { ...loadSettings() };
-        panel.remove();
-    };
-
-    buttonContainer.appendChild(cancelBtn);
-    buttonContainer.appendChild(applyBtn);
-    panel.appendChild(buttonContainer);
-
-    document.body.appendChild(panel);
+function animatePath() {
+    if (lineCount >= currentSettings.MAX_LINES) return;
+    
+    const lineSet = new LineSet(scene, lineCount);
+    lineSets.push(lineSet);
+    lineCount++;
+    
+    lineSet.startPath();
+    
+    if (lineCount < currentSettings.MAX_LINES) {
+        setTimeout(() => animatePath(), currentSettings.LINE_DELAY);
+    }
 }
 
-// Update the controls legend style
-const controlsLegend = document.querySelector('.controls-legend');
-if (controlsLegend) {
-    controlsLegend.style.cssText = `
-        position: fixed;
-        left: 20px;
-        bottom: 20px;
-        background: rgba(0, 0, 0, 0.4);
-        backdrop-filter: blur(10px);
-        padding: 15px;
-        border-radius: 15px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        color: white;
-        font-family: Arial;
-        z-index: 100;
-        box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
-    `;
+class LineSet {
+    constructor(scene, index) {
+        this.scene = scene;
+        this.index = index;
+        this.color = new THREE.Color().setHSL(index / currentSettings.MAX_LINES, 1, 0.5);
+        
+        // Remove physics-related state
+        this.allPoints = [];
+        this.lineColors = [];
+        this.currentPathIndex = 0;
+        this.isAnimating = false;
+        this.animationProgress = 0;
+        this.predictionPoints = [];
+        this.lastDirection = new THREE.Vector3();
+        
+        this.initialize();
+    }
+
+    initialize() {
+        // Create the lines
+        this.combinedLine = new THREE.Line(
+            new THREE.BufferGeometry(),
+            new THREE.LineBasicMaterial({
+                vertexColors: true,
+                linewidth: 16,
+                transparent: true,
+                opacity: 1.0
+            })
+        );
+
+        this.glowLine = new THREE.Line(
+            new THREE.BufferGeometry(),
+            new THREE.LineBasicMaterial({
+                vertexColors: true,
+                linewidth: 32,
+                transparent: true,
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending
+            })
+        );
+
+        this.scene.add(this.glowLine);
+        this.scene.add(this.combinedLine);
+    }
+
+    startPath() {
+        if (!tokenCloud) {
+            console.error('Token cloud not available');
+            return;
+        }
+
+        // Get random starting point
+        const positions = tokenCloud.geometry.attributes.position;
+        const count = positions.array.length / 3;
+        const randomIndex = Math.floor(Math.random() * count) * 3;
+        const startPoint = new THREE.Vector3(
+            positions.array[randomIndex],
+            positions.array[randomIndex + 1],
+            positions.array[randomIndex + 2]
+        );
+
+        this.allPoints.push(startPoint.clone());
+        this.lineColors.push(this.color);
+        this.animateNextSegment();
+    }
+
+    animateNextSegment() {
+        if (this.currentPathIndex >= currentSettings.PATH_LENGTH) {
+            console.log('Truth path complete');
+            this.addPredictionPoints();
+            return;
+        }
+
+        if (!this.isAnimating) {
+            this.isAnimating = true;
+            this.animationProgress = 0;
+            
+            const positions = tokenCloud.geometry.attributes.position;
+            const weights = tokenCloud.geometry.attributes.weight;
+            
+            const currentPoint = this.allPoints[this.currentPathIndex];
+            const nextPoint = this.findNextHighestWeightPoint(currentPoint, positions, weights, this.velocity, this.patterns);
+            
+            const animate = () => {
+                this.animationProgress += currentSettings.ANIMATION_SPEED * (16.67 / SEGMENT_DURATION);
+                
+                if (this.animationProgress >= 1) {
+                    this.allPoints.push(nextPoint.clone());
+                    this.lineColors.push(this.color);
+                    this.updatePathGeometry();
+                    
+                    if (this.currentPathIndex === currentSettings.PREDICTION_START_POINT - 1) {
+                        const prediction = this.predictFullPath(this.allPoints.slice(0, currentSettings.PREDICTION_START_POINT));
+                        this.predictionPoints = prediction.paths[0];
+                    }
+                    
+                    this.isAnimating = false;
+                    this.currentPathIndex++;
+                    setTimeout(() => this.animateNextSegment(), 50);
+                    return;
+                }
+                
+                const interpolatedPoint = new THREE.Vector3().lerpVectors(
+                    currentPoint,
+                    nextPoint,
+                    this.animationProgress
+                );
+                
+                const currentPoints = [...this.allPoints, interpolatedPoint];
+                this.updatePathGeometry(currentPoints);
+                
+                requestAnimationFrame(animate);
+            };
+            
+            animate();
+        }
+    }
+
+    predictFullPath(currentPoints) {
+        const context = currentPoints.slice(-4);
+        const startPoint = currentPoints[currentPoints.length - 1];
+        
+        // Calculate the pattern in local space (relative to start point)
+        const movements = [];
+        for (let i = 1; i < context.length; i++) {
+            const localPoint = context[i].clone().sub(startPoint);
+            const prevLocalPoint = context[i-1].clone().sub(startPoint);
+            movements.push({
+                direction: localPoint.sub(prevLocalPoint),
+                distance: localPoint.length()
+            });
+        }
+        
+        // Use the actual start point for prediction
+        const predictedPath = [];
+        let currentPoint = startPoint.clone();
+        let currentDirection = movements[movements.length - 1].direction.normalize();
+
+        // Invert the initial direction
+        currentDirection.multiplyScalar(-1);
+
+        for (let i = 0; i < (currentSettings.PATH_LENGTH - currentPoints.length); i++) {
+            // Add slight variation to prevent straight lines
+            const variation = new THREE.Vector3(
+                (Math.random() - 0.5) * 0.05,
+                (Math.random() - 0.5) * 0.05,
+                (Math.random() - 0.5) * 0.05
+            );
+            currentDirection.add(variation).normalize();
+
+            // Move in the inverted direction
+            const nextPoint = currentPoint.clone().add(
+                currentDirection.multiplyScalar(movements[movements.length - 1].distance)
+            );
+            
+            predictedPath.push(nextPoint);
+            currentPoint = nextPoint;
+            
+            // Keep inverting the direction for each step
+            currentDirection = nextPoint.clone()
+                .sub(currentPoint)
+                .normalize()
+                .multiplyScalar(-1);
+        }
+
+        return {
+            paths: [predictedPath],
+            confidence: 0.85
+        };
+    }
+
+    calculateAverageStepSize(points) {
+        let totalDistance = 0;
+        for (let i = 1; i < points.length; i++) {
+            totalDistance += points[i].distanceTo(points[i-1]);
+        }
+        return totalDistance / (points.length - 1);
+    }
+
+    addPredictionPoints() {
+        if (!this.predictionPoints || this.predictionPoints.length === 0) {
+            console.error('No prediction points available');
+            return;
+        }
+
+        const predictionGeometry = new THREE.BufferGeometry();
+        const predictionMaterial = new THREE.LineBasicMaterial({
+            color: 0xffff00,
+            linewidth: 16,
+            transparent: true,
+            opacity: 1.0
+        });
+
+        this.predictionLine = new THREE.Line(predictionGeometry, predictionMaterial);
+        this.scene.add(this.predictionLine);
+
+        const startPoint = this.allPoints[currentSettings.PREDICTION_START_POINT - 1].clone();
+        const predictionPositions = [startPoint];
+
+        const addNextPoint = (index) => {
+            if (index >= this.predictionPoints.length) {
+                console.log('Prediction Complete');
+                return;
+            }
+
+            predictionPositions.push(this.predictionPoints[index].clone());
+            
+            const positions = predictionPositions.flatMap(p => [p.x, p.y, p.z]);
+            predictionGeometry.setAttribute('position', 
+                new THREE.Float32BufferAttribute(positions, 3));
+
+            setTimeout(() => addNextPoint(index + 1), SEGMENT_DURATION);
+        };
+
+        addNextPoint(0);
+    }
+
+    updatePathGeometry(points = this.allPoints) {
+        const positions = [];
+        const colors = [];
+        
+        points.forEach(point => {
+            positions.push(point.x, point.y, point.z);
+            colors.push(this.color.r, this.color.g, this.color.b);
+        });
+        
+        if (positions.length > 0) {
+            this.combinedLine.geometry.setAttribute('position', 
+                new THREE.Float32BufferAttribute(positions, 3));
+            this.combinedLine.geometry.setAttribute('color', 
+                new THREE.Float32BufferAttribute(colors, 3));
+                
+            this.glowLine.geometry.setAttribute('position', 
+                new THREE.Float32BufferAttribute(positions, 3));
+            this.glowLine.geometry.setAttribute('color', 
+                new THREE.Float32BufferAttribute(colors, 3));
+        }
+    }
+
+    rotateVelocity(velocity, angle) {
+        // Convert angle to radians
+        const rad = angle * Math.PI / 180;
+        const rotated = velocity.clone();
+        
+        // Rotate in XZ plane
+        const x = rotated.x * Math.cos(rad) - rotated.z * Math.sin(rad);
+        const z = rotated.x * Math.sin(rad) + rotated.z * Math.cos(rad);
+        rotated.x = x;
+        rotated.z = z;
+        
+        return rotated;
+    }
+
+    evaluatePatternMatch(path, patterns) {
+        if (!patterns) return 1;
+        
+        let score = 0;
+        
+        // Check velocity consistency
+        const velocities = [];
+        for (let i = 1; i < path.length; i++) {
+            velocities.push(path[i].clone().sub(path[i-1]));
+        }
+        
+        // Compare with observed patterns
+        const avgVelocity = velocities.reduce((acc, vel) => acc.add(vel), new THREE.Vector3())
+            .divideScalar(velocities.length);
+        
+        const velocityMatch = 1 - avgVelocity.clone()
+            .sub(patterns.velocity)
+            .length() / patterns.velocity.length();
+            
+        // Check turn rate consistency
+        const turns = [];
+        for (let i = 1; i < velocities.length; i++) {
+            turns.push(velocities[i].angleTo(velocities[i-1]));
+        }
+        
+        const avgTurnRate = turns.reduce((a, b) => a + b, 0) / turns.length;
+        const turnMatch = 1 - Math.abs(avgTurnRate - patterns.turnRate) / Math.PI;
+        
+        score = (velocityMatch + turnMatch) / 2;
+        return Math.max(0.1, score); // Ensure some minimum score
+    }
+
+    findNextHighestWeightPoint(currentPoint, positions, weights, currentVelocity, patterns) {
+        // Remove all physics/gravity calculations
+        const direction = new THREE.Vector3();
+        const stepSize = 0.15; // Base step size
+        
+        // If we have patterns, use them
+        if (patterns) {
+            // Use pattern-based direction
+            if (this.lastDirection) {
+                direction.copy(this.lastDirection);
+                // Apply learned turn rate
+                if (patterns.turnRate) {
+                    direction.applyAxisAngle(
+                        new THREE.Vector3(0, 1, 0),
+                        patterns.turnRate
+                    );
+                }
+            } else {
+                // Initial direction
+                direction.set(
+                    Math.random() - 0.5,
+                    Math.random() - 0.5,
+                    Math.random() - 0.5
+                ).normalize();
+            }
+            
+            // Use pattern-based step size if available
+            const moveDistance = patterns.avgStepSize || stepSize;
+            direction.multiplyScalar(moveDistance);
+        } else {
+            // Simple random walk for truth line
+            direction.set(
+                Math.random() - 0.5,
+                Math.random() - 0.5,
+                Math.random() - 0.5
+            ).normalize().multiplyScalar(stepSize);
+        }
+        
+        // Store for next iteration
+        this.lastDirection = direction.clone().normalize();
+        
+        return currentPoint.clone().add(direction);
+    }
+
+    analyzeMovementPatterns(points) {
+        const patterns = {
+            velocity: new THREE.Vector3(),
+            turnRate: 0,
+            consistency: 0,
+            avgStepSize: 0
+        };
+
+        if (points.length < 2) return patterns;
+
+        // Calculate velocities between points
+        const velocities = [];
+        for (let i = 1; i < points.length; i++) {
+            velocities.push(points[i].clone().sub(points[i-1]));
+        }
+
+        // Calculate average velocity (momentum)
+        patterns.velocity = velocities.reduce((acc, vel) => acc.add(vel), new THREE.Vector3())
+            .divideScalar(velocities.length);
+
+        // Calculate turn rate and consistency
+        let totalTurnAngle = 0;
+        let angleVariance = 0;
+        for (let i = 2; i < points.length; i++) {
+            const v1 = velocities[i-2];
+            const v2 = velocities[i-1];
+            const angle = v1.angleTo(v2);
+            totalTurnAngle += angle;
+            angleVariance += Math.pow(angle - (totalTurnAngle / (i-1)), 2);
+        }
+
+        patterns.turnRate = totalTurnAngle / (points.length - 2);
+        patterns.consistency = 1 - (angleVariance / (points.length - 2));
+        patterns.avgStepSize = velocities.reduce((acc, vel) => acc + vel.length(), 0) / velocities.length;
+
+        return patterns;
+    }
+
+    scoreTrajectory(trajectory) {
+        if (!trajectory || !trajectory.path) return 0;
+        
+        const path = trajectory.path;
+        let score = 0;
+        
+        // Weight different factors
+        const weights = {
+            energyEfficiency: 0.4,  // How well it conserves energy
+            smoothness: 0.3,        // How smooth the turns are
+            speedConsistency: 0.3   // How well it maintains speed
+        };
+        
+        // Energy efficiency (from trajectory properties)
+        score += trajectory.energyEfficiency * weights.energyEfficiency;
+        
+        // Path smoothness (from trajectory properties)
+        score += trajectory.smoothness * weights.smoothness;
+        
+        // Speed consistency
+        const speedScore = trajectory.averageSpeed;
+        score += speedScore * weights.speedConsistency;
+        
+        // Normalize score to 0-1 range
+        return Math.min(1, Math.max(0, score));
+    }
+
+    analyzeDirectionChanges(points) {
+        const changes = [];
+        for (let i = 2; i < points.length; i++) {
+            const v1 = points[i].clone().sub(points[i-1]);
+            const v2 = points[i-1].clone().sub(points[i-2]);
+            changes.push(v1.angleTo(v2));
+        }
+        return {
+            angles: changes,
+            average: changes.reduce((a, b) => a + b, 0) / changes.length,
+            variance: this.calculateVariance(changes)
+        };
+    }
+
+    analyzeStepPattern(points) {
+        const steps = [];
+        for (let i = 1; i < points.length; i++) {
+            steps.push(points[i].distanceTo(points[i-1]));
+        }
+        return {
+            steps: steps,
+            average: steps.reduce((a, b) => a + b, 0) / steps.length,
+            variance: this.calculateVariance(steps)
+        };
+    }
+
+    analyzeLocalContext(points) {
+        const positions = tokenCloud.geometry.attributes.position;
+        const weights = tokenCloud.geometry.attributes.weight;
+        const lastPoint = points[points.length - 1];
+        
+        // Analyze nearby token weights
+        const nearbyWeights = [];
+        const maxInfluence = 2.0;
+        
+        for (let i = 0; i < positions.array.length; i += 3) {
+            const tokenPos = new THREE.Vector3(
+                positions.array[i],
+                positions.array[i + 1],
+                positions.array[i + 2]
+            );
+            const distance = lastPoint.distanceTo(tokenPos);
+            if (distance < maxInfluence) {
+                nearbyWeights.push({
+                    weight: weights.array[i / 3],
+                    distance: distance
+                });
+            }
+        }
+        
+        return {
+            weights: nearbyWeights,
+            averageWeight: nearbyWeights.reduce((acc, w) => acc + w.weight, 0) / nearbyWeights.length,
+            weightGradient: this.calculateWeightGradient(nearbyWeights)
+        };
+    }
+
+    calculateVariance(values) {
+        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+        return values.reduce((acc, val) => acc + Math.pow(val - avg, 2), 0) / values.length;
+    }
+
+    calculateWeightGradient(weights) {
+        // Calculate the direction of increasing weights
+        return weights.reduce((acc, w) => acc + w.weight / (1 + w.distance), 0);
+    }
+
+    applyPatterns(currentPoint, patterns) {
+        // Combine all pattern influences
+        const direction = new THREE.Vector3();
+        
+        // Apply direction changes
+        if (this.lastDirection) {
+            direction.copy(this.lastDirection);
+            // Use direction pattern's average angle
+            if (patterns.direction && patterns.direction.average) {
+                direction.applyAxisAngle(
+                    new THREE.Vector3(0, 1, 0),
+                    patterns.direction.average
+                );
+            }
+        } else {
+            // Initial direction
+            direction.set(
+                Math.random() - 0.5,
+                Math.random() - 0.5,
+                Math.random() - 0.5
+            ).normalize();
+        }
+        
+        // Apply step pattern
+        const stepSize = patterns.steps ? patterns.steps.average : 0.15;
+        
+        // Apply local context influence
+        const contextInfluence = patterns.context ? patterns.context.weightGradient : 0;
+        
+        // Combine and normalize
+        direction.normalize().multiplyScalar(stepSize);
+        
+        // Store for next iteration
+        this.lastDirection = direction.clone();
+        
+        return currentPoint.clone().add(direction);
+    }
 }
 
 function init() {
@@ -852,9 +1024,6 @@ function init() {
         controls.minDistance = 3;
         controls.maxDistance = 20;
 
-        // Setup keyboard controls
-        setupCameraControls();
-
         // Create modern UI first
         createModernUI();
 
@@ -870,6 +1039,25 @@ function init() {
     }
 }
 
+// Add animate function
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+// Add window resize handler
+window.addEventListener('resize', onWindowResize, false);
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+console.log('Starting initialization');
+init();
+
 function createTokenCloud() {
     console.log('Creating token cloud...');
     try {
@@ -878,10 +1066,9 @@ function createTokenCloud() {
         const colors = [];
         const weights = [];
 
-        // Create topographical distribution
-        const resolution = 50; // Grid resolution
-        const size = 8; // Total size of the field
-        const noiseScale = 0.2; // Scale of the noise variation
+        const resolution = 50;
+        const size = 8;
+        const noiseScale = 0.2;
 
         for (let i = 0; i < resolution; i++) {
             for (let j = 0; j < resolution; j++) {
@@ -890,18 +1077,15 @@ function createTokenCloud() {
                     const y = (j / resolution - 0.5) * size;
                     const z = (k / resolution - 0.5) * size;
 
-                    // Create topographical weight distribution
                     const elevation = Math.sin(x * noiseScale) * Math.cos(z * noiseScale) +
                                     Math.sin(y * noiseScale * 2) * 0.5 +
                                     Math.cos((x + z) * noiseScale * 0.5) * 0.3;
                     
                     const weight = Math.max(0, (elevation + 1) / 2);
 
-                    if (weight > 0.3) { // Only add points above certain density
+                    if (weight > 0.3) {
                         positions.push(x, y, z);
                         weights.push(weight);
-
-                        // Color based on elevation/weight
                         const r = Math.min(1, (1 - weight) * 1.5);
                         const g = Math.min(1, weight * 1.5);
                         const b = 0.3 + Math.sin(elevation) * 0.2;
@@ -946,7 +1130,7 @@ function createCircleTexture() {
     const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
     gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
     gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.4)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
     
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 64, 64);
@@ -956,518 +1140,13 @@ function createCircleTexture() {
     return texture;
 }
 
-// Modify the animate function to remove spacebar check
-function animate() {
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-}
-
-// Handle window resizing
-window.addEventListener('resize', onWindowResize, false);
-
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-console.log('Starting initialization');
-init(); 
-
-function animatePath() {
-    console.log('Starting path generation...');
-    
-    if (lineCount >= MAX_LINES) return;
-    
-    // Create new line set with index
-    const lineSet = new LineSet(scene, lineCount);
-    lineSets.push(lineSet);
-    lineCount++;
-    
-    // Start the path
-    lineSet.startPath();
-    
-    // Start another path after a delay
-    if (lineCount < MAX_LINES) {
-        setTimeout(() => animatePath(), 2000);
-    }
-}
-
-function calculateDirectionFactor(currentPoint, candidatePoint) {
-    if (pathPoints.length < 2) {
-        return 1.0;
-    }
-    
-    const prevPoint = pathPoints[pathPoints.length - 2],
-          currentDir = new THREE.Vector3().subVectors(currentPoint, prevPoint).normalize(),
-          candidateDir = new THREE.Vector3().subVectors(candidatePoint, currentPoint).normalize();
-    
-    // Prefer smooth directional changes
-    const angle = currentDir.dot(candidateDir);
-    return (angle + 1) / 2; // Normalize to 0-1 range
-}
-
-function calculateLocalDensity(point, positions, weights) {
-    let density = 0;
-    const radius = 1.0;
-    
-    for (let i = 0; i < positions.array.length; i += 3) {
-        const testPoint = new THREE.Vector3(
-            positions.array[i],
-            positions.array[i + 1],
-            positions.array[i + 2]
-        );
-        
-        const distance = point.distanceTo(testPoint);
-        if (distance < radius) {
-            density += weights.array[i / 3] * (1 - distance / radius);
-        }
-    }
-    
-    return Math.min(density / 10, 1); // Normalize to 0-1 range
-}
-
-function calculateCurvatureFactor(point) {
-    if (pathPoints.length < 3) return 1.0;
-    
-    const p1 = pathPoints[pathPoints.length - 3];
-    const p2 = pathPoints[pathPoints.length - 2];
-    const p3 = pathPoints[pathPoints.length - 1];
-    
-    // Calculate approximate curvature
-    const v1 = new THREE.Vector3().subVectors(p2, p1);
-    const v2 = new THREE.Vector3().subVectors(p3, p2);
-    const v3 = new THREE.Vector3().subVectors(point, p3);
-    
-    const c1 = v1.angleTo(v2);
-    const c2 = v2.angleTo(v3);
-    
-    // Prefer consistent curvature
-    return 1 - Math.abs(c1 - c2) / Math.PI;
-}
-
-function smoothPathSegment(start, end, positions, weights) {
-    const steps = 5;
-    const points = [start];
-    
-    for (let i = 1; i < steps; i++) {
-        const t = i / steps;
-        const interpolated = new THREE.Vector3().lerpVectors(start, end, t);
-        
-        // Adjust position based on local density
-        const offset = calculateDensityOffset(interpolated, positions, weights);
-        interpolated.add(offset);
-        
-        points.push(interpolated);
-    }
-    
-    points.push(end);
-    
-    // Return smoothed endpoint
-    return points[points.length - 1];
-}
-
-function calculateDensityOffset(point, positions, weights) {
-    const offset = new THREE.Vector3();
-    const radius = 1.0;
-    
-    for (let i = 0; i < positions.array.length; i += 3) {
-        const testPoint = new THREE.Vector3(
-            positions.array[i],
-            positions.array[i + 1],
-            positions.array[i + 2]
-        );
-        
-        const distance = point.distanceTo(testPoint);
-        if (distance < radius && distance > 0) {
-            const weight = weights.array[i / 3];
-            const influence = weight * (1 - distance / radius);
-            offset.add(testPoint.sub(point).multiplyScalar(influence / distance));
-        }
-    }
-    
-    return offset.multiplyScalar(0.1); // Scale down the influence
-}
-
-function calculateDivergence() {
-    if (!storedPrediction || !pathPoints) return 0;
-    
-    const predictedPoints = storedPrediction.paths[0];
-    let totalDivergence = 0;
-    
-    // Calculate average distance between predicted and actual points
-    for (let i = 4; i < pathPoints.length && i < predictedPoints.length; i++) {
-        const actualPoint = pathPoints[i];
-        const predictedPoint = predictedPoints[i - 4]; // Offset by 4 initial points
-        totalDivergence += actualPoint.distanceTo(predictedPoint);
-    }
-    
-    return Math.round((1 - (totalDivergence / pathPoints.length)) * 100);
-}
-
-function calculateDirectionScore(currentPoint, candidatePoint, pattern) {
-    // Calculate how well this point follows the established direction trend
-    const proposedDirection = new THREE.Vector3()
-        .subVectors(candidatePoint, currentPoint)
-        .normalize();
-    
-    const trendDirection = pattern.directionTrend.normalize();
-    
-    // Return 1 for perfect alignment, 0 for perpendicular, -1 for opposite
-    return proposedDirection.dot(trendDirection);
-}
-
-// New function to handle prediction continuation
-function continueWithPrediction() {
-    if (!storedPrediction || !predictionPoints || predictionPoints.length === 0) {
-        console.error('No prediction data available');
-        return;
-    }
-
-    // Start from the last truth point
-    const lastTruthPoint = pathPoints[pathPoints.length - 1];
-    const firstPredictionPoint = predictionPoints[0];
-
-    // Create smooth transition between truth and prediction
-    const transitionPoints = createTransitionCurve(lastTruthPoint, firstPredictionPoint);
-    
-    // Add transition points to the line
-    transitionPoints.forEach(point => {
-        pathPoints.push(point.clone());
-    });
-
-    // Add prediction points
-    predictionPoints.forEach(point => {
-        pathPoints.push(point.clone());
-    });
-
-    // Update the line geometry with all points
-    updatePathGeometry(pathLine);
-}
-
-// Helper function to create smooth transition
-function createTransitionCurve(start, end) {
-    const points = [];
-    const steps = 10;
-    
-    for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        // Use cubic interpolation for smoother transition
-        const point = new THREE.Vector3().lerpVectors(start, end, t);
-        points.push(point);
-    }
-    
-    return points;
-}
-
-// Add new function to handle prediction animation
-function startPredictionAnimation() {
-    if (!storedPrediction || !predictionPoints || predictionPoints.length === 0) {
-        console.error('No prediction data available');
-        return;
-    }
-    
-    isPredictionAnimating = true;
-    predictionAnimationProgress = 0;
-    
-    const animate = () => {
-        if (!isPredictionAnimating) return;
-        
-        predictionAnimationProgress += ANIMATION_SPEED * (16.67 / SEGMENT_DURATION);
-        
-        if (predictionAnimationProgress >= 1) {
-            // Show full prediction line
-            const predictionVertices = [];
-            predictionPoints.forEach(point => {
-                predictionVertices.push(point.x, point.y, point.z);
-            });
-            pathLine.geometry.setAttribute('position',
-                new THREE.Float32BufferAttribute(predictionVertices, 3));
-            
-            isPredictionAnimating = false;
-            console.log('Prediction animation complete');
-            return;
-        }
-        
-        // Animate prediction line growing
-        const numPoints = Math.floor(predictionPoints.length * predictionAnimationProgress);
-        const predictionVertices = [];
-        
-        // Ensure we have at least one point
-        if (numPoints < 1) {
-            const firstPoint = predictionPoints[0];
-            predictionVertices.push(firstPoint.x, firstPoint.y, firstPoint.z);
-        } else {
-            // Add all complete segments
-            for (let i = 0; i < Math.min(numPoints, predictionPoints.length); i++) {
-                const point = predictionPoints[i];
-                predictionVertices.push(point.x, point.y, point.z);
-            }
-            
-            // Add interpolated last point if we're not at the end
-            if (numPoints < predictionPoints.length - 1) {
-                const lastPoint = predictionPoints[numPoints];
-                const nextPoint = predictionPoints[Math.min(numPoints + 1, predictionPoints.length - 1)];
-                const partialProgress = (predictionAnimationProgress * predictionPoints.length) % 1;
-                
-                const interpolatedPoint = new THREE.Vector3().lerpVectors(
-                    lastPoint,
-                    nextPoint,
-                    partialProgress
-                );
-                predictionVertices.push(interpolatedPoint.x, interpolatedPoint.y, interpolatedPoint.z);
-            }
-        }
-        
-        // Only update geometry if we have points
-        if (predictionVertices.length > 0) {
-            pathLine.geometry.setAttribute('position',
-                new THREE.Float32BufferAttribute(predictionVertices, 3));
-        }
-        
-        requestAnimationFrame(animate);
-    };
-    
-    animate();
-}
-
-// Add this after camera setup in init()
-function setupCameraControls() {
-    // Add keyboard controls for camera positions
-    window.addEventListener('keydown', (event) => {
-        switch(event.key) {
-            case '1':
-                moveCamera(CAMERA_POSITIONS.front);
-                break;
-            case '2':
-                moveCamera(CAMERA_POSITIONS.top);
-                break;
-            case '3':
-                moveCamera(CAMERA_POSITIONS.side);
-                break;
-            case '4':
-                moveCamera(CAMERA_POSITIONS.angle);
-                break;
-            case 'r':
-                // Reset camera to default position
-                moveCamera(CAMERA_POSITIONS.front);
-                break;
-        }
-    });
-}
-
 function moveCamera(position) {
-    const duration = 1000;
-    const startPosition = camera.position.clone();
-    const startTime = Date.now();
-
-    function animateCamera() {
-        const now = Date.now();
-        const elapsed = now - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-
-        // Smooth easing
-        const eased = progress < .5 ? 
-            2 * progress * progress : 
-            -1 + (4 - 2 * progress) * progress;
-
-        camera.position.x = startPosition.x + (position.x - startPosition.x) * eased;
-        camera.position.y = startPosition.y + (position.y - startPosition.y) * eased;
-        camera.position.z = startPosition.z + (position.z - startPosition.z) * eased;
-
-        camera.lookAt(0, 0, 0);
-
-        if (progress < 1) {
-            requestAnimationFrame(animateCamera);
-        }
-    }
-
-    animateCamera();
-}
-
-// Add toggle button after paths complete
-function addVisualizationControls() {
-    const controlPanel = document.createElement('div');
-    controlPanel.style.cssText = `
-        position: fixed;
-        left: 20px;
-        top: 20px;
-        background: rgba(0, 0, 0, 0.8);
-        padding: 10px;
-        border-radius: 5px;
-        z-index: 100;
-    `;
-
-    const toggleButton = document.createElement('button');
-    toggleButton.textContent = 'Toggle Cloud Visibility';
-    toggleButton.style.cssText = `
-        background: #444;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 4px;
-        cursor: pointer;
-    `;
-
-    toggleButton.onclick = () => {
-        isCloudVisible = !isCloudVisible;
-        
-        // Animate opacity transition
-        gsap.to(tokenCloud.material, {
-            opacity: isCloudVisible ? 1.0 : 0.0,
-            duration: 0.8,
-            ease: "power2.inOut"
-        });
-    };
-
-    controlPanel.appendChild(toggleButton);
-    document.body.appendChild(controlPanel);
-}
-
-function analyzeConvergence() {
-    const results = [];
-    
-    // Test predictions starting from different points
-    for(let startPoint = 4; startPoint < 25; startPoint++) {
-        const prediction = predictFullPath(allPoints.slice(0, startPoint));
-        const predictedPath = prediction.paths[0];
-        
-        // Calculate accuracy by comparing with actual path
-        let totalDeviation = 0;
-        let pointCount = 0;
-        
-        for(let i = 0; i < predictedPath.length; i++) {
-            const truthIndex = startPoint + i;
-            if (truthIndex >= allPoints.length) break;
-            
-            const deviation = predictedPath[i].distanceTo(allPoints[truthIndex]);
-            totalDeviation += deviation;
-            pointCount++;
-        }
-        
-        const accuracy = 1 - (totalDeviation / pointCount);
-        results.push({
-            startPoint,
-            accuracy: accuracy * 100
-        });
-        
-        console.log(`Prediction from point ${startPoint}: ${accuracy.toFixed(2)}% accurate`);
-    }
-    
-    return results;
-}
-
-// Add settings button to UI
-function createSettingsPanel() {
-    const settingsBtn = createButton(
-        'settings',
-        'Settings',
-        () => {
-            const panel = document.createElement('div');
-            panel.style.cssText = `
-                position: fixed;
-                left: 50%;
-                top: 50%;
-                transform: translate(-50%, -50%);
-                background: rgba(0, 0, 0, 0.9);
-                backdrop-filter: blur(10px);
-                padding: 20px;
-                border-radius: 15px;
-                color: white;
-                z-index: 1000;
-            `;
-
-            const settings = [
-                { label: 'Number of Lines', key: 'MAX_LINES', min: 1, max: 10, step: 1 },
-                { label: 'Animation Speed', key: 'ANIMATION_SPEED', min: 0.1, max: 2, step: 0.1 },
-                { label: 'Prediction Start Point', key: 'PREDICTION_START_POINT', min: 4, max: 20, step: 1 },
-                { label: 'Randomness', key: 'RANDOM_FACTOR', min: 0, max: 1, step: 0.1 },
-                { label: 'Turbulence', key: 'TURBULENCE', min: 0, max: 1, step: 0.1 }
-            ];
-
-            settings.forEach(setting => {
-                const container = document.createElement('div');
-                container.style.marginBottom = '10px';
-                
-                const label = document.createElement('label');
-                label.textContent = setting.label;
-                
-                const input = document.createElement('input');
-                input.type = 'range';
-                input.min = setting.min;
-                input.max = setting.max;
-                input.step = setting.step;
-                input.value = currentSettings[setting.key];
-                
-                const value = document.createElement('span');
-                value.textContent = currentSettings[setting.key];
-                
-                input.oninput = () => {
-                    currentSettings[setting.key] = parseFloat(input.value);
-                    value.textContent = input.value;
-                };
-                
-                container.appendChild(label);
-                container.appendChild(input);
-                container.appendChild(value);
-                panel.appendChild(container);
-            });
-
-            // Add buttons
-            const buttonContainer = document.createElement('div');
-            buttonContainer.style.marginTop = '20px';
-            
-            const applyBtn = document.createElement('button');
-            applyBtn.textContent = 'Apply & Restart';
-            applyBtn.onclick = () => {
-                saveSettings();
-                restartVisualization();
-                panel.remove();
-            };
-            
-            const cancelBtn = document.createElement('button');
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.onclick = () => {
-                currentSettings = { ...loadSettings() };
-                panel.remove();
-            };
-            
-            buttonContainer.appendChild(applyBtn);
-            buttonContainer.appendChild(cancelBtn);
-            panel.appendChild(buttonContainer);
-            
-            document.body.appendChild(panel);
-        }
-    );
-    
-    return settingsBtn;
-}
-
-// Add data storage functions
-function saveSettings() {
-    const data = {
-        settings: currentSettings,
-        timestamp: new Date().toISOString(),
-        results: lineSets.map(lineSet => ({
-            truthPath: lineSet.allPoints,
-            predictionPath: lineSet.predictionPoints,
-            accuracy: calculateAccuracy(lineSet)
-        }))
-    };
-    
-    // Save to file using fetch
-    fetch('/api/save-data', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data)
+    gsap.to(camera.position, {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        duration: 1.2,
+        ease: "power2.inOut",
+        onUpdate: () => camera.lookAt(0, 0, 0)
     });
-}
-
-function loadSettings() {
-    return fetch('/api/load-settings')
-        .then(res => res.json())
-        .catch(() => DEFAULT_SETTINGS);
 }
